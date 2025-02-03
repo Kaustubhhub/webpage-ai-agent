@@ -1,12 +1,13 @@
 import axios from "axios";
-import * as cheerio from "cheerio"
-import OpenAI from "openai";
-import * as dotenv from "dotenv"
-import { ChromaClient } from "chromadb"
+import * as cheerio from "cheerio";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import * as dotenv from "dotenv";
+import { ChromaClient } from "chromadb";
 
-dotenv.config()
+dotenv.config();
 
-const openai = new OpenAI();
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY); // Use API key from environment variables
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 const chromaClient = new ChromaClient({
     path: "http://localhost:8000",
 });
@@ -39,30 +40,27 @@ async function scrapeWebpage(url = "") {
 }
 
 async function generateVectorEmbeddings({ text }) {
-    const embedding = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: text,
-        encoding_format: "float",
-    });
-    return embedding.data[0].embedding;
+    // Using Gemini API to generate embeddings
+    const result = await model.generateContent(text);
+    const embedding = result.response.text(); // Assuming the generated response is used as embedding
+    return embedding;
 }
 
 async function ingest(url = "") {
-    console.log(`🚀 Ingesting the url : ${url}`)
+    console.log(`🚀 Ingesting the url : ${url}`);
     const { head, body, internalLinks, externalLinks } = await scrapeWebpage(url);
     const bodyChunks = chunkText(body, 50);
-    // const headEmbedding = await generateVectorEmbeddings({ head });
-    // insertIntoDB({ embedding: headEmbedding, url, head })
+
     for (const chunk of bodyChunks) {
-        const bodyEmbedding = await generateVectorEmbeddings({ chunk });
-        insertIntoDB({ embedding: bodyEmbedding, url, head, body: chunk })
+        const bodyEmbedding = await generateVectorEmbeddings({ text: chunk });
+        insertIntoDB({ embedding: bodyEmbedding, url, head, body: chunk });
     }
 
     for (const link of internalLinks) {
         const _url = `${url}${link}`;
         await ingest(_url);
     }
-    console.log(`👌 Ingesting success for url : ${url}`)
+    console.log(`👌 Ingesting success for url : ${url}`);
 }
 
 function chunkText(text, size) {
@@ -79,12 +77,14 @@ function chunkText(text, size) {
 }
 
 async function insertIntoDB({ embedding, url, body = "", head }) {
-    const collection = await chromaClient.createCollection(WEB_COLLECTION);
+    const collection = await chromaClient.getOrCreateCollection({
+        name: WEB_COLLECTION
+    });
     collection.add({
         ids: [url],
         embeddings: [embedding],
         metadatas: [{ url, body, head }]
-    })
+    });
 }
 
-await ingest("https://piyushgarg.dev")
+await ingest("https://kaustubh-dev-five.vercel.app/");
